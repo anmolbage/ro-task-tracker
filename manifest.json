@@ -1,0 +1,16 @@
+{
+  "name": "RO Task Tracker",
+  "short_name": "RO Tasks",
+  "description": "Who has which task in RO Hazaribag, what is overdue, and whom to chase",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f3f8",
+  "theme_color": "#3b0a45",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,15 @@
+.DS_Store
+Thumbs.db
+node_modules/
+*.log
+.vscode/
+.clasp.json
+.clasprc.json
+apps-script/Import*.gs
+
+# Never commit customer/CBS data — GitHub Pages repos are public
+*.csv
+*.xls
+*.xlsx
+*.txt.gz
+samples/
