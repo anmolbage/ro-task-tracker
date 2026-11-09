@@ -10,10 +10,10 @@
 window.APP_CONFIG = {
 
   // 👇 PASTE YOUR APPS SCRIPT WEB APP URL HERE
-  API_URL: 'PASTE_YOUR_APPS_SCRIPT_URL_HERE',
+  API_URL: 'https://script.google.com/macros/s/AKfycbxYF4xOuGmf4JhNcy7QLXuy65SPmrbeMYvj5wgHZxHDEQT_i2e7gq8K78UG-bKwHElq/exec',
 
   APP_NAME: 'RO Task Tracker',
-  VERSION: '0.2.0',          // bump together with CACHE in sw.js on every release
+  VERSION: '0.2.1',          // bump together with CACHE in sw.js on every release
 
   // Short prefix for this app's browser storage, so two apps on the same
   // GitHub Pages domain never read each other's login or cache.
@@ -27,5 +27,5 @@ window.APP_CONFIG = {
   SOURCES: { own: 'My own', ho: 'HO letter / mail', district: 'District administration', audit: 'Audit / inspection' },
 
   // Google Sheet used as the database (for the "Open Sheet" link in More)
-  SHEET_URL: ''
+  SHEET_URL: 'https://docs.google.com/spreadsheets/d/1DD1QLuJw2lUwwIFtolhnagwRpKfIrwN46Ql1aNIyMJA/edit'
 };
