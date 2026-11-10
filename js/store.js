@@ -28,6 +28,7 @@ const Store = {
   people: [],       // RO staff: id, name, role, mobile, sub, nodal[], cats[]
   branches: [],     // code, name, bm, mobile
   cats: [],         // [{group, items[]}]
+  repeats: [],      // repeating-task templates: freq, n, anchorDay, leadDays, nextDue
   users: [],
   settings: { remindBefore: 1, dueGap: 2, lang: 'en', remindTime: '09:00', sig: 'Regional Manager, RO Hazaribag', sigHi: 'क्षेत्रीय प्रबंधक, क्षेत्रीय कार्यालय हजारीबाग' },
   queue: [],
@@ -52,6 +53,7 @@ const Store = {
         this.people = c.people || [];
         this.branches = c.branches || [];
         this.cats = c.cats || [];
+        this.repeats = c.repeats || [];
         this.users = c.users || [];
         this.settings = Object.assign(this.settings, c.settings || {});
         this.lastSync = c.lastSync || null;
@@ -64,7 +66,7 @@ const Store = {
   persist() {
     try {
       localStorage.setItem(LS.CACHE, JSON.stringify({
-        tasks: this.tasks, logs: this.logs, people: this.people, branches: this.branches, cats: this.cats,
+        tasks: this.tasks, logs: this.logs, people: this.people, branches: this.branches, cats: this.cats, repeats: this.repeats,
         users: this.users, settings: this.settings, lastSync: this.lastSync, cursor: this.cursor
       }));
       localStorage.setItem(LS.QUEUE, JSON.stringify(this.queue));
@@ -81,7 +83,7 @@ const Store = {
 
   clearSession() {
     this.token = null; this.user = null;
-    this.tasks = []; this.logs = []; this.people = []; this.branches = []; this.cats = []; this.users = []; this.queue = [];
+    this.tasks = []; this.logs = []; this.people = []; this.branches = []; this.cats = []; this.repeats = []; this.users = []; this.queue = [];
     this.cursor = null; this.lastError = null;
     try { [LS.TOKEN, LS.USER, LS.CACHE, LS.QUEUE].forEach(k => localStorage.removeItem(k)); } catch (e) {}
   },
@@ -180,6 +182,10 @@ const Store = {
     if (r.people) this.people = r.people;
     if (r.branches) this.branches = r.branches;
     if (r.cats) this.cats = r.cats;
+    if (r.repeats) {
+      const queuedReps = new Set(this.queue.filter(j => j.action === 'saveRepeat').map(j => j.payload.repeat.id));
+      this.repeats = r.repeats.filter(x => !queuedReps.has(x.id)).concat(this.repeats.filter(x => queuedReps.has(x.id)));
+    }
     this.users = r.users || [];
     this.settings = Object.assign({}, this.settings, r.settings || {});
     if (r.user) this.setSession(this.token, r.user);
@@ -224,6 +230,7 @@ const Store = {
   /* ---------------- lookups ---------------- */
   person(id) { return this.people.find(p => p.id === id) || null; },
   branch(code) { return this.branches.find(b => Number(b.code) === Number(code)) || null; },
+  repeat(id) { return this.repeats.find(r => r.id === id) || null; },
   logsFor(taskId) {
     return this.logs.filter(l => l.taskId === taskId)
       .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.createdAt).localeCompare(String(b.createdAt)));
@@ -284,6 +291,20 @@ const Store = {
   deleteBranch(code) {
     this.branches = this.branches.filter(x => Number(x.code) !== Number(code));
     this.enqueue('deleteBranch', { code });
+    this.persist(); this.trySync();
+  },
+  saveRepeat(rp) {
+    const now = new Date().toISOString();
+    rp.updatedAt = now; if (!rp.createdAt) { rp.createdAt = now; rp.createdBy = this.user.name; }
+    const i = this.repeats.findIndex(x => x.id === rp.id);
+    if (i >= 0) this.repeats[i] = rp; else this.repeats.push(rp);
+    this.enqueue('saveRepeat', { repeat: rp });
+    this.persist(); this.trySync();
+    return rp;
+  },
+  deleteRepeat(id) {
+    this.repeats = this.repeats.filter(x => x.id !== id);
+    this.enqueue('deleteRepeat', { id });
     this.persist(); this.trySync();
   },
   saveCategories(cats) {

@@ -37,14 +37,15 @@ var TABS = {
   CATS: 'Categories',
   USERS: 'Users',
   SETTINGS: 'Settings',
-  ALOG: 'ActivityLog'
+  ALOG: 'ActivityLog',
+  REPEATS: 'Repeats'
 };
 
 // One column per field so the Sheet stays readable and filterable.
 // toType: staff | branch | many. toId: person id or branch code. toCodes / replied: JSON, circulars only.
 // Dates are kept as yyyy-mm-dd text so the phone and the Sheet never disagree about time zones.
 var TASK_COLS = ['id', 'createdAt', 'updatedAt', 'toType', 'toId', 'toName', 'toCodes', 'replied', 'category', 'text', 'how',
-  'givenOn', 'dueDate', 'status', 'doneOn', 'source', 'critical', 'snoozeTill', 'createdBy', 'deleted'];
+  'givenOn', 'dueDate', 'status', 'doneOn', 'source', 'critical', 'snoozeTill', 'createdBy', 'deleted', 'repeatId'];
 var TASK_TEXT_COLS = ['givenOn', 'dueDate', 'doneOn', 'snoozeTill', 'toId'];
 // One row per history entry on a task: given, rem (reminded), ext (extended), note, done, reopen, snooze.
 var LOG_COLS = ['id', 'createdAt', 'updatedAt', 'taskId', 'date', 'kind', 'note', 'createdBy', 'deleted'];
@@ -52,6 +53,10 @@ var LOG_COLS = ['id', 'createdAt', 'updatedAt', 'taskId', 'date', 'kind', 'note'
 var PEOPLE_COLS = ['id', 'name', 'role', 'mobile', 'substitute', 'nodal', 'categories', 'active'];
 var BRANCH_COLS = ['code', 'name', 'bmName', 'bmMobile', 'active'];
 var CAT_COLS = ['group', 'category'];
+// Repeating tasks: a template that creates a task every interval. freq: days | weeks | months | years, every n.
+// anchorDay keeps the day of month for monthly / yearly repeats; leadDays = how many days before the due date the task appears.
+var REPEAT_COLS = ['id', 'createdAt', 'updatedAt', 'toType', 'toId', 'toName', 'toCodes', 'category', 'text', 'how', 'source', 'critical',
+  'freq', 'n', 'anchorDay', 'leadDays', 'nextDue', 'lastDue', 'active', 'createdBy', 'deleted'];
 
 var USER_COLS = ['username', 'name', 'pin', 'role', 'mobile', 'active'];
 var SETTING_COLS = ['key', 'value'];
@@ -151,6 +156,7 @@ function setup() {
   if (ct.getLastRow() < 2) writeCats_(CAT_LIST.map(function (g) { return { group: g[0], items: g[1] }; }));
 
   ensureTab_(ss, TABS.ALOG, ALOG_COLS);
+  ensureRepeatsTab_(ss);
 
   var users = ensureTab_(ss, TABS.USERS, USER_COLS);
   var pins = null;
@@ -187,7 +193,15 @@ function ensureSetup_() {
 
 // One-time changes to an existing Sheet, run in order on the next request after an update.
 // A fresh setup already has them, so setup() marks them all as done. Never reorder or remove.
-var MIGRATIONS = [];
+var MIGRATIONS = [
+  // 1: repeating tasks (2026-11-10): repeatId column on Tasks, Repeats tab
+  function () { var ss = ss_(); ensureTab_(ss, TABS.TASKS, TASK_COLS); ensureRepeatsTab_(ss); }
+];
+function ensureRepeatsTab_(ss) {
+  var r = ensureTab_(ss, TABS.REPEATS, REPEAT_COLS);
+  ['toId', 'nextDue', 'lastDue'].forEach(function (c) { r.getRange(2, REPEAT_COLS.indexOf(c) + 1, 500, 1).setNumberFormat('@'); });
+  return r;
+}
 function runMigrations_() {
   var done = Number(props_().getProperty('MIGRATION') || 0);
   if (done >= MIGRATIONS.length) return;
@@ -252,6 +266,8 @@ function doPost(e) {
       case 'saveBranch':      lock.waitLock(20000); return json_(saveBranch_(user, req.branch));
       case 'deleteBranch':    lock.waitLock(20000); return json_(deleteBranch_(user, req.code));
       case 'saveCategories':  lock.waitLock(20000); return json_(saveCategories_(user, req.cats));
+      case 'saveRepeat':      lock.waitLock(20000); return json_(saveRepeat_(user, req.repeat));
+      case 'deleteRepeat':    lock.waitLock(20000); return json_(deleteRepeat_(user, req.id));
       case 'saveSettings':    lock.waitLock(20000); return json_(saveSettings_(user, req.settings));
       case 'saveUsers':       lock.waitLock(20000); return json_(saveUsers_(user, req.users, req.baseline));
       case 'changePin':       lock.waitLock(20000); return json_(changePin_(user, req.oldPin, req.newPin));
@@ -373,6 +389,7 @@ function changePin_(user, oldPin, newPin) {
 // ============================================================ READ
 // since: send only tasks and log rows changed after it (plus deleted task ids). Lists are always sent whole.
 function bootstrap_(user, since) {
+  spawnDueRepeats_();   // repeating tasks whose next due date is within reach become real tasks
   var cutoff = since ? new Date(since).getTime() - 2 * 60000 : NaN;   // 2 min overlap for clock skew
   var delta = !isNaN(cutoff);
   var changed = function (v) { var t = v instanceof Date ? v.getTime() : new Date(v).getTime(); return isNaN(t) || t >= cutoff; };
@@ -400,7 +417,7 @@ function bootstrap_(user, since) {
     });
 
   return { ok: true, delta: delta, user: user, tasks: tasks, removed: removed, logs: logs,
-    people: readPeople_(), branches: readBranches_(), cats: readCats_(),
+    people: readPeople_(), branches: readBranches_(), cats: readCats_(), repeats: readRepeats_(),
     users: users, settings: readSettings_(), serverTime: new Date().toISOString() };
 }
 
@@ -413,6 +430,7 @@ function normalizeTask_(r) {
   out.status = r.status === 'done' ? 'done' : 'open';
   try { out.toCodes = r.toCodes ? JSON.parse(r.toCodes) : []; } catch (e) { out.toCodes = []; }
   try { out.replied = r.replied ? JSON.parse(r.replied) : {}; } catch (e) { out.replied = {}; }
+  out.repeatId = String(r.repeatId == null ? '' : r.repeatId);
   out.createdAt = toIso_(r.createdAt);
   out.updatedAt = toIso_(r.updatedAt);
   delete out.deleted;
@@ -440,6 +458,22 @@ function readCats_() {
     by[g].items.push(String(r.category));
   });
   return groups;
+}
+function readRepeats_() {
+  return readTab_(TABS.REPEATS, REPEAT_COLS).filter(function (r) { return r.id && String(r.deleted).toUpperCase() !== 'TRUE'; }).map(normalizeRepeat_);
+}
+function normalizeRepeat_(r) {
+  var out = {};
+  REPEAT_COLS.forEach(function (c) { out[c] = r[c] == null ? '' : r[c]; });
+  out.toId = String(r.toId == null ? '' : r.toId);
+  try { out.toCodes = r.toCodes ? JSON.parse(r.toCodes) : []; } catch (e) { out.toCodes = []; }
+  out.critical = String(r.critical).toUpperCase() === 'TRUE';
+  out.active = String(r.active).toUpperCase() !== 'FALSE';
+  out.n = Number(r.n) || 1; out.anchorDay = Number(r.anchorDay) || 0; out.leadDays = Number(r.leadDays) || 0;
+  out.nextDue = toDateStr_(r.nextDue); out.lastDue = toDateStr_(r.lastDue);
+  out.createdAt = toIso_(r.createdAt); out.updatedAt = toIso_(r.updatedAt);
+  delete out.deleted;
+  return out;
 }
 function splitList_(v) { return String(v == null ? '' : v).split(',').map(function (s) { return s.trim(); }).filter(String); }
 
@@ -585,6 +619,97 @@ function writeCats_(cats) {
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, CAT_COLS.length).clearContent();
   if (rows.length) sh.getRange(2, 1, rows.length, CAT_COLS.length).setValues(rows);
 }
+
+// ============================================================ REPEATING TASKS
+function parseIso_(s) { var p = String(s).split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
+function fmtIso_(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }
+function todayIso_() { return fmtIso_(new Date()); }
+function addDaysIso_(iso, n) { var d = parseIso_(iso); d.setDate(d.getDate() + n); return fmtIso_(d); }
+// The due date after `due` for a repeat. Monthly and yearly keep the anchor day of month, clamped to the month's length.
+function nextDueIso_(due, freq, n, anchorDay) {
+  var d = parseIso_(due); n = Number(n) || 1;
+  if (freq === 'days') d.setDate(d.getDate() + n);
+  else if (freq === 'weeks') d.setDate(d.getDate() + 7 * n);
+  else {
+    var day = anchorDay || d.getDate();
+    d.setDate(1);
+    if (freq === 'years') d.setFullYear(d.getFullYear() + n); else d.setMonth(d.getMonth() + n);
+    var last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(day, last));
+  }
+  return fmtIso_(d);
+}
+function saveRepeat_(user, rp) {
+  if (!rp || !rp.id || !rp.text) return { ok: false, message: 'Missing repeat.' };
+  var sh = ss_().getSheetByName(TABS.REPEATS);
+  var row = findRow_(sh, rp.id);
+  var now = new Date().toISOString();
+  var rec = {};
+  REPEAT_COLS.forEach(function (c) { rec[c] = rp[c] == null ? '' : rp[c]; });
+  rec.toCodes = rp.toCodes && rp.toCodes.length ? JSON.stringify(rp.toCodes) : '';
+  rec.critical = rp.critical ? 'TRUE' : '';
+  rec.active = rp.active === false ? 'FALSE' : 'TRUE';
+  rec.n = Number(rp.n) || 1; rec.anchorDay = Number(rp.anchorDay) || ''; rec.leadDays = Number(rp.leadDays) || 0;
+  rec.nextDue = String(rp.nextDue || '').slice(0, 10); rec.lastDue = String(rp.lastDue || '').slice(0, 10);
+  rec.updatedAt = now; rec.deleted = '';
+  if (row < 0) { rec.createdAt = rp.createdAt || now; rec.createdBy = user.name; }
+  else { var prev = sh.getRange(row, 1, 1, REPEAT_COLS.length).getValues()[0]; rec.createdAt = prev[REPEAT_COLS.indexOf('createdAt')] || now; rec.createdBy = prev[REPEAT_COLS.indexOf('createdBy')] || user.name; }
+  upsert_(sh, REPEAT_COLS, rec, row);
+  log_(user.name, row < 0 ? 'create' : 'update', 'repeat', rec.id, String(rec.text).slice(0, 80));
+  return { ok: true, repeat: normalizeRepeat_(rec) };
+}
+function deleteRepeat_(user, id) {
+  var sh = ss_().getSheetByName(TABS.REPEATS);
+  var row = findRow_(sh, id);
+  if (row > 0) {
+    sh.getRange(row, REPEAT_COLS.indexOf('deleted') + 1).setValue('TRUE');
+    sh.getRange(row, REPEAT_COLS.indexOf('updatedAt') + 1).setValue(new Date().toISOString());
+    log_(user.name, 'delete', 'repeat', id, '');
+  }
+  return { ok: true };
+}
+// Creates the real task for every active repeat whose next due date minus leadDays has arrived.
+// If several due dates were missed (the app was not opened for weeks), only the latest one becomes
+// a task; the schedule then continues from the next future date. Runs on every bootstrap and from
+// the optional daily trigger (spawnDueRepeats). Guarded by a lock so two phones never spawn twice.
+function spawnDueRepeats_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return 0;
+  try {
+    var ss = ss_(), sh = ss.getSheetByName(TABS.REPEATS);
+    if (!sh) return 0;
+    var today = todayIso_(), made = 0;
+    var rows = readTab_(TABS.REPEATS, REPEAT_COLS);
+    rows.forEach(function (r, i) {
+      if (!r.id || String(r.deleted).toUpperCase() === 'TRUE' || String(r.active).toUpperCase() === 'FALSE') return;
+      var rp = normalizeRepeat_(r);
+      if (!rp.nextDue) return;
+      var due = rp.nextDue, lastDue = '', guard = 0;
+      while (due && addDaysIso_(due, -rp.leadDays) <= today && guard++ < 120) { lastDue = due; due = nextDueIso_(due, rp.freq, rp.n, rp.anchorDay); }
+      if (!lastDue) return;
+      var now = new Date().toISOString();
+      var id = 'R' + Date.now() + String(Math.floor(Math.random() * 1000));
+      var replied = {};
+      if (rp.toType === 'many') (rp.toCodes || []).forEach(function (c) { replied[c] = false; });
+      var task = { id: id, createdAt: now, updatedAt: now, toType: rp.toType, toId: rp.toId, toName: rp.toName,
+        toCodes: rp.toCodes && rp.toCodes.length ? JSON.stringify(rp.toCodes) : '',
+        replied: rp.toType === 'many' ? JSON.stringify(replied) : '',
+        category: rp.category, text: rp.text, how: rp.how || 'In person', givenOn: today, dueDate: lastDue, status: 'open', doneOn: '',
+        source: rp.source || 'own', critical: rp.critical ? 'TRUE' : '', snoozeTill: '', createdBy: 'Repeat', deleted: '', repeatId: rp.id };
+      upsert_(ss.getSheetByName(TABS.TASKS), TASK_COLS, task, -1);
+      upsert_(ss.getSheetByName(TABS.LOG), LOG_COLS, { id: 'L' + Date.now() + String(Math.floor(Math.random() * 100000)), createdAt: now, updatedAt: now, taskId: id, date: today,
+        kind: 'given', note: 'Repeating task, due ' + lastDue, createdBy: 'Repeat', deleted: '' }, -1);
+      sh.getRange(i + 2, REPEAT_COLS.indexOf('nextDue') + 1).setValue(due);
+      sh.getRange(i + 2, REPEAT_COLS.indexOf('lastDue') + 1).setValue(lastDue);
+      sh.getRange(i + 2, REPEAT_COLS.indexOf('updatedAt') + 1).setValue(now);
+      log_('Repeat', 'create', 'task', id, String(rp.text).slice(0, 80));
+      made++;
+    });
+    return made;
+  } finally { lock.releaseLock(); }
+}
+// For a daily time trigger (Triggers -> Add -> spawnDueRepeats, day timer). Not required: every app open does the same.
+function spawnDueRepeats() { var n = spawnDueRepeats_(); Logger.log('Created ' + n + ' repeating task(s).'); return n; }
 
 function saveSettings_(user, settings) {
   if (user.role !== 'Admin') return { ok: false, message: 'Only an Admin can change settings.' };

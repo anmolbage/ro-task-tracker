@@ -26,6 +26,26 @@ const digits = m => { const d = String(m || '').replace(/\D/g, ''); return d.len
 const HOW = CFG.HOW, SOURCES = CFG.SOURCES;
 const SRC_PILL = { ho: ['p-ho', 'HO'], district: ['p-dist', 'District'], audit: ['p-audit', 'Audit'] };
 const HIST_TEXT = { given: 'Task given', rem: 'Reminded', ext: 'Due date extended', note: 'Note', done: 'Marked done', reopen: 'Reopened', snooze: 'Reminder snoozed' };
+const DOWL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const ORD = d => d + (d % 10 === 1 && d !== 11 ? 'st' : d % 10 === 2 && d !== 12 ? 'nd' : d % 10 === 3 && d !== 13 ? 'rd' : 'th');
+// Repeating tasks: the due date after `due`. Same rule as nextDueIso_ in Code.gs.
+function nextDueIso(due, freq, n, anchorDay) {
+  const d = toDate(due); n = Number(n) || 1;
+  if (freq === 'days') d.setDate(d.getDate() + n);
+  else if (freq === 'weeks') d.setDate(d.getDate() + 7 * n);
+  else { const day = anchorDay || d.getDate(); d.setDate(1); if (freq === 'years') d.setFullYear(d.getFullYear() + n); else d.setMonth(d.getMonth() + n); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last)); }
+  return fmtISO(d);
+}
+function repeatLabel(rp) {
+  const n = Number(rp.n) || 1;
+  if (rp.freq === 'days') return n === 1 ? 'Every day' : 'Every ' + n + ' days';
+  if (rp.freq === 'weeks') return (n === 1 ? 'Every week' : 'Every ' + n + ' weeks') + (rp.nextDue ? ' on ' + DOWL[toDate(rp.nextDue).getDay()] : '');
+  if (rp.freq === 'months') return (n === 1 ? 'Every month' : n === 3 ? 'Every quarter' : n === 6 ? 'Every 6 months' : 'Every ' + n + ' months') + (rp.anchorDay ? ' on the ' + ORD(rp.anchorDay) : '');
+  return (n === 1 ? 'Every year' : 'Every ' + n + ' years') + (rp.nextDue ? ' on ' + pretty(rp.nextDue) : '');
+}
+const REPEAT_OPTIONS = [['', 'Does not repeat'], ['days:1', 'Every day'], ['weeks:1', 'Every week'], ['weeks:2', 'Every 2 weeks'], ['months:1', 'Every month'], ['months:3', 'Every quarter'], ['months:6', 'Every 6 months'], ['years:1', 'Every year'], ['custom', 'Every N days…']];
+const LEAD_OPTIONS = [[0, 'On the due date'], [1, '1 day before'], [2, '2 days before'], [3, '3 days before'], [5, '5 days before'], [7, 'A week before'], [10, '10 days before'], [15, '15 days before']];
+const whoOfRepeat = rp => rp.toType === 'staff' ? ((Store.person(rp.toId) || {}).name || rp.toName) : rp.toType === 'branch' ? ((Store.branch(rp.toId) || {}).name || rp.toName) : (rp.toCodes || []).length + ' branches';
 
 const ICON = {
   today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18M9 15l2 2 4-4"/></svg>',
@@ -131,6 +151,7 @@ function tagsHtml(t) {
   if (t.toType === 'many' && open(t)) s += '<span class="pill p-many">' + pendingOf(t).length + ' pending</span>';
   const rc = open(t) ? remCount(t) : 0;
   if (rc > 1) s += '<span class="pill p-rem">reminded ×' + rc + '</span>';
+  if (t.repeatId) s += '<span class="pill p-cat">↻ repeats</span>';
   return s;
 }
 function taskRow(t, opts) {
@@ -244,7 +265,8 @@ function renderMore() {
     '<div class="card"><p class="eyebrow">Lists</p><div class="menu">' +
     mrow('people', 'People', 'RO staff: ' + Store.people.length + ' · ' + withMob + ' with mobile. Add, edit, remove.', 'people') +
     mrow('branches', 'Branch contacts', Store.branches.length + ' branches · ' + bmMob + ' BM mobiles saved. Edit BM name and mobile.', 'branches') +
-    mrow('tag', 'Task categories', allCats().length + ' categories in ' + Store.cats.length + ' groups. Add or remove.', 'cats') + '</div></div>' +
+    mrow('tag', 'Task categories', allCats().length + ' categories in ' + Store.cats.length + ' groups. Add or remove.', 'cats') +
+    mrow('clock', 'Repeating tasks', (Store.repeats.filter(r => r.active).length ? Store.repeats.filter(r => r.active).length + ' active' + (Store.repeats.some(r => !r.active) ? ', ' + Store.repeats.filter(r => !r.active).length + ' paused' : '') : 'None yet') + '. Monthly returns, weekly reviews: created by themselves.', 'repeats') + '</div></div>' +
     '<div class="card"><p class="eyebrow">Reminders</p><div class="sh-body">' +
     '<label class="f">Show a reminder how many days before the due date?<div class="quick" style="margin-top:4px">' + [0, 1, 2, 3, 7].map(n => '<button data-rb="' + n + '" class="' + (Number(st.remindBefore) === n ? 'on' : '') + '">' + (n === 0 ? 'Only on the day' : n === 1 ? '1 day before' : n + ' days before') + '</button>').join('') + '</div></label>' +
     '<div class="row2"><label class="f">Reminder time<input class="inp" type="time" id="c-time" value="' + esc(st.remindTime) + '"></label><label class="f">Default due date<select class="inp" id="c-gap">' + [0, 1, 2, 3, 5, 7].map(n => '<option value="' + n + '" ' + (Number(st.dueGap) === n ? 'selected' : '') + '>' + (n === 0 ? 'Same day' : n === 1 ? 'Tomorrow' : n + ' days later') + '</option>').join('') + '</select></label></div>' +
@@ -316,6 +338,7 @@ function openTask(id) {
       '<button class="btn" data-extend="' + esc(t.id) + '">' + ICON.clock + ' Extend due date</button><button class="btn" data-addnote="' + esc(t.id) + '">Add a note</button></div>'
       : '<div class="btns"><button class="btn" data-reopen="' + esc(t.id) + '">Reopen</button></div>') +
     '<div id="taskform"></div>' +
+    (t.repeatId ? '<div class="note">↻ <b>Repeating task.</b> ' + (Store.repeat(t.repeatId) ? esc(repeatLabel(Store.repeat(t.repeatId))) + (Store.repeat(t.repeatId).active ? ' · next on ' + esc(pretty(Store.repeat(t.repeatId).nextDue)) : ' · paused') + ' <button class="link" data-repeat="' + esc(t.repeatId) + '">Open the repeat</button>' : 'The repeat it came from has been removed.') + '</div>' : '') +
     '<div class="card"><p class="eyebrow">History</p><ul class="tl">' + histHtml(t) + '</ul></div>' +
     (p ? '<div class="note"><b>' + esc(p.name) + '</b> looks after: ' + esc((p.cats || []).join(', ')) + '.</div>' : '') +
     '<div class="btns" style="justify-content:space-between"><button class="btn sm ghost" data-' + (t.toType === 'staff' ? 'person="' + esc(t.toId) : 'branch="' + esc(t.toId)) + '">All tasks with ' + esc(whoName(t)) + ' →</button><button class="btn sm ghost" style="color:var(--danger)" data-deltask="' + esc(t.id) + '">' + ICON.trash + ' Delete</button></div>' +
@@ -430,6 +453,10 @@ function openGive(pre) {
     '<label class="f">Source<select class="inp" id="g-src">' + Object.entries(SOURCES).map(([k, v]) => '<option value="' + k + '">' + v + '</option>').join('') + '</select></label></div>' +
     '<label class="f" style="margin-top:10px">Due date<input class="inp" type="date" id="g-due" value="' + addDays(today(), gap) + '" min="' + today() + '" required></label>' +
     '<div class="quick" style="margin-top:8px">' + [[0, 'Today'], [1, 'Tomorrow'], [2, 'In 2 days'], [7, 'In a week'], [15, '15 days']].map(([n, l]) => '<button type="button" data-qd="' + n + '" class="' + (n === gap ? 'on' : '') + '">' + l + '</button>').join('') + '</div>' +
+    '<div class="row2" style="margin-top:10px"><label class="f">Repeats<select class="inp" id="g-rep">' + REPEAT_OPTIONS.map(([v, l]) => '<option value="' + v + '">' + l + '</option>').join('') + '</select></label>' +
+    '<label class="f" id="g-leadwrap" hidden>Show it<select class="inp" id="g-lead">' + LEAD_OPTIONS.map(([v, l]) => '<option value="' + v + '" ' + (v === 3 ? 'selected' : '') + '>' + l + '</option>').join('') + '</select></label></div>' +
+    '<div id="g-repn-wrap" hidden style="margin-top:8px"><label class="f">Every how many days?<input class="inp" id="g-repn" type="number" inputmode="numeric" min="1" max="365" placeholder="e.g. 10"></label></div>' +
+    '<p class="small faint" id="g-rephint" hidden style="margin:6px 0 0">The task you save now is the first one. The next one appears by itself, the chosen number of days before its due date. All repeats are listed under More → Repeating tasks.</p>' +
     '<div class="sw" style="margin-top:10px"><div><div class="t">Critical</div><div class="s">Sits on top of Today until done</div></div><button type="button" class="knob" id="g-crit" aria-pressed="false" aria-label="Critical"></button></div>' +
     '<label class="f" style="margin-top:10px">Note (optional)<input class="inp" id="g-note" placeholder="Reference, letter number, who asked…"></label>' +
     '<button class="btn pri full" type="submit" style="margin-top:14px">Save task</button>' +
@@ -459,6 +486,7 @@ function openGive(pre) {
     if (e.target.id === 'g-branch') G.branch = e.target.value;
     if (e.target.id === 'g-due') form.querySelectorAll('[data-qd]').forEach(x => x.classList.remove('on'));
     if (e.target.id === 'g-cat') { $('#g-newcat').hidden = e.target.value !== '__new'; if (e.target.value === '__new') $('#g-catname').focus(); }
+    if (e.target.id === 'g-rep') { const v = e.target.value; $('#g-leadwrap').hidden = !v; $('#g-rephint').hidden = !v; $('#g-repn-wrap').hidden = v !== 'custom'; if (v === 'custom') $('#g-repn').focus(); }
   });
   form.addEventListener('submit', e => {
     e.preventDefault();
@@ -478,7 +506,18 @@ function openGive(pre) {
     if (!cat) { toast('Choose a category', 'err'); return; }
     const note = $('#g-note').value.trim();
     Object.assign(t, { category: cat, text, how: $('#g-how').value, givenOn: today(), dueDate: due, status: 'open', doneOn: '', source: $('#g-src').value, critical: G.crit, snoozeTill: '' });
-    Store.saveTask(t, [{ kind: 'given', note }]);
+    const rep = $('#g-rep').value;
+    if (rep) {
+      let freq, n;
+      if (rep === 'custom') { freq = 'days'; n = parseInt($('#g-repn').value, 10) || 0; if (n < 1) { toast('Every how many days?', 'err'); return; } }
+      else { const parts = rep.split(':'); freq = parts[0]; n = Number(parts[1]) || 1; }
+      const anchorDay = (freq === 'months' || freq === 'years') ? toDate(due).getDate() : 0;
+      const rp = { id: 'P' + Date.now() + Math.floor(Math.random() * 1000), toType: t.toType, toId: t.toId, toName: t.toName, toCodes: t.toCodes || [], category: cat, text, how: t.how, source: t.source, critical: G.crit,
+        freq, n, anchorDay, leadDays: Number($('#g-lead').value) || 0, nextDue: nextDueIso(due, freq, n, anchorDay), lastDue: due, active: true };
+      Store.saveRepeat(rp);
+      t.repeatId = rp.id;
+    }
+    Store.saveTask(t, [{ kind: 'given', note: rep ? (note ? note + ' · ' : '') + 'First of a repeating task' : note }]);
     forceClose(); S.tab = 'today'; render();
     toast(navigator.onLine ? 'Saved. Reminder on ' + pretty(addDays(due, -(Number(settings().remindBefore) || 0)) < today() ? today() : addDays(due, -(Number(settings().remindBefore) || 0))) : 'Saved on this phone — will sync', 'ok');
   });
@@ -567,6 +606,58 @@ function openCats() {
   sheet('Task categories', allCats().length + ' categories · ' + Store.cats.length + ' groups', body);
   $('#cf').addEventListener('submit', e => { e.preventDefault(); const n = $('#c-name').value.trim(); if (!n) return; if (allCats().includes(n)) { toast(n + ' already exists', 'err'); return; }
     const cats = JSON.parse(JSON.stringify(Store.cats)); cats.find(g => g.group === $('#c-grp').value).items.push(n); Store.saveCategories(cats); openCats(); toast('Added ' + n, 'ok'); });
+}
+/* ---------------- repeating tasks ---------------- */
+function openRepeatsList() {
+  const rows = Store.repeats.slice().sort((a, b) => (b.active - a.active) || String(a.nextDue).localeCompare(String(b.nextDue)))
+    .map(rp => '<button class="erow" data-repeat="' + esc(rp.id) + '" style="' + (rp.active ? '' : 'opacity:.6') + '"><div style="min-width:0"><div class="n">' + esc(rp.text) + '</div><div class="s">' + esc(whoOfRepeat(rp)) + ' · ' + esc(repeatLabel(rp)) + (rp.active ? '' : ' · paused') + '</div></div><div class="mob set">' + (rp.active ? 'next ' + esc(pretty(rp.nextDue)) : 'paused') + '</div></button>').join('');
+  sheet('Repeating tasks', 'Each one creates a real task before every due date',
+    '<div class="note">Give a task with <b>Repeats</b> set, and it comes back here. The next copy appears in Today by itself, the chosen number of days before it is due, even when a previous copy is still open.</div>' +
+    '<div class="card"><div class="menu">' + (rows || '<div class="empty">No repeating task yet. Use + and set Repeats.</div>') + '</div></div>' +
+    '<button class="btn pri full" data-give-rep>' + ICON.plus + ' New repeating task</button>');
+}
+function openRepeat(id) {
+  const rp = Store.repeat(id); if (!rp) return;
+  const made = T().filter(t => t.repeatId === id);
+  const openN = made.filter(open).length;
+  const body = '<div class="tags" style="justify-content:flex-start"><span class="pill p-cat">↻ ' + esc(repeatLabel(rp)) + '</span>' + (rp.active ? '' : '<span class="pill p-rem">Paused</span>') + (rp.critical ? '<span class="pill p-crit">Critical</span>' : '') + (rp.category ? '<span class="pill p-cat">' + esc(rp.category) + '</span>' : '') + '</div>' +
+    '<div class="kv"><div><div class="l">Given to</div><div class="v">' + esc(whoOfRepeat(rp)) + '</div></div><div><div class="l">Next due</div><div class="v">' + (rp.active ? esc(pretty(rp.nextDue)) : '—') + '</div><div class="small muted">appears ' + (rp.leadDays ? plural(rp.leadDays, 'day') + ' before' : 'on the day') + '</div></div>' +
+    '<div><div class="l">Last created</div><div class="v">' + (rp.lastDue ? esc(pretty(rp.lastDue)) : '—') + '</div></div><div><div class="l">Tasks so far</div><div class="v num">' + made.length + '</div><div class="small muted">' + openN + ' still open</div></div></div>' +
+    '<div class="cbtns"><button class="btn" data-rep-toggle="' + esc(id) + '">' + (rp.active ? 'Pause' : 'Resume') + '</button><button class="btn" data-rep-now="' + esc(id) + '" ' + (rp.active ? '' : 'disabled') + '>' + ICON.plus + ' Create the next one now</button>' +
+    '<button class="btn" data-rep-edit="' + esc(id) + '">' + ICON.pen + ' Edit schedule</button><button class="btn danger" data-rep-del="' + esc(id) + '">' + ICON.trash + ' Delete</button></div>' +
+    '<div id="repform"></div>' +
+    (made.length ? section('Tasks created from it', made.length, listHtml(byDue(made), { hideWho: true })) : '') +
+    '<div class="btns"><button class="btn sm ghost" data-more="repeats">← All repeating tasks</button></div>';
+  sheet(esc(rp.text), 'Repeating task', body);
+}
+function repeatEditForm(id) {
+  const rp = Store.repeat(id); if (!rp) return;
+  const cur = REPEAT_OPTIONS.some(o => o[0] === rp.freq + ':' + rp.n) ? rp.freq + ':' + rp.n : 'custom';
+  $('#repform').innerHTML = '<form class="card" id="rf"><p class="eyebrow">Schedule</p>' +
+    '<div class="row2"><label class="f">Repeats<select class="inp" id="r-rep">' + REPEAT_OPTIONS.filter(o => o[0]).map(([v, l]) => '<option value="' + v + '" ' + (v === cur ? 'selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+    '<label class="f">Show it<select class="inp" id="r-lead">' + LEAD_OPTIONS.map(([v, l]) => '<option value="' + v + '" ' + (v === Number(rp.leadDays) ? 'selected' : '') + '>' + l + '</option>').join('') + '</select></label></div>' +
+    '<div class="row2" style="margin-top:10px"><label class="f">Next due date<input class="inp" type="date" id="r-next" value="' + esc(rp.nextDue) + '" required></label><label class="f" id="r-n-wrap" ' + (cur === 'custom' ? '' : 'hidden') + '>Every how many days?<input class="inp" id="r-n" type="number" min="1" max="365" value="' + (cur === 'custom' ? Number(rp.n) : '') + '"></label></div>' +
+    '<label class="f" style="margin-top:10px">Task text<input class="inp" id="r-text" value="' + esc(rp.text) + '" required></label>' +
+    '<div class="btns" style="margin-top:10px"><button class="btn pri" type="submit">Save schedule</button><button class="btn ghost" type="button" data-cancelrep>Cancel</button></div></form>';
+  $('#r-rep').addEventListener('change', e => { $('#r-n-wrap').hidden = e.target.value !== 'custom'; });
+  $('#rf').addEventListener('submit', e => {
+    e.preventDefault();
+    const v = $('#r-rep').value; let freq, n;
+    if (v === 'custom') { freq = 'days'; n = parseInt($('#r-n').value, 10) || 0; if (n < 1) { toast('Every how many days?', 'err'); return; } }
+    else { const parts = v.split(':'); freq = parts[0]; n = Number(parts[1]) || 1; }
+    const next = $('#r-next').value; if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) { toast('Pick the next due date', 'err'); return; }
+    const text = $('#r-text').value.trim(); if (!text) { toast('Task text is needed', 'err'); return; }
+    Store.saveRepeat(Object.assign({}, rp, { freq, n, anchorDay: (freq === 'months' || freq === 'years') ? toDate(next).getDate() : 0, leadDays: Number($('#r-lead').value) || 0, nextDue: next, text }));
+    openRepeat(id); toast('Schedule saved', 'ok');
+  });
+}
+function repeatCreateNow(id) {
+  const rp = Store.repeat(id); if (!rp || !rp.active) return;
+  const t = { toType: rp.toType, toId: rp.toId, toName: rp.toName, toCodes: rp.toCodes || [], replied: rp.toType === 'many' ? Object.fromEntries((rp.toCodes || []).map(c => [c, false])) : {},
+    category: rp.category, text: rp.text, how: rp.how || 'In person', givenOn: today(), dueDate: rp.nextDue, status: 'open', doneOn: '', source: rp.source || 'own', critical: !!rp.critical, snoozeTill: '', repeatId: rp.id };
+  Store.saveTask(t, [{ kind: 'given', note: 'Repeating task, created by hand' }]);
+  Store.saveRepeat(Object.assign({}, rp, { lastDue: rp.nextDue, nextDue: nextDueIso(rp.nextDue, rp.freq, rp.n, rp.anchorDay) }));
+  openRepeat(id); toast('Task created, due ' + pretty(t.dueDate), 'ok');
 }
 function openAbout() {
   const feat = (ic, t, p) => '<div class="feat"><div class="ic">' + ICON[ic] + '</div><div><b>' + t + '</b><p>' + p + '</p></div></div>';
@@ -777,7 +868,14 @@ document.addEventListener('click', e => {
     sheet('Pending list for ' + esc(p.name), plural(o.length, 'open task'), '<div class="msg" id="rtext">' + esc(txt) + '</div><div class="cbtns">' + (digits(p.mobile) ? '<a class="btn wa" href="https://wa.me/91' + digits(p.mobile) + '?text=' + encodeURIComponent(txt) + '" target="_blank" rel="noopener">' + ICON.wa + ' Open WhatsApp</a>' : '<button class="btn wa off">' + ICON.wa + ' No mobile saved</button>') + '<button class="btn" data-copy>' + ICON.copy + ' Copy text</button></div><div class="btns"><button class="btn sm ghost" data-person="' + esc(p.id) + '">← Back</button></div>'); return; }
   if (b.hasAttribute('data-cancelform')) { $('#taskform').innerHTML = ''; return; }
   if (d.tick != null) { const [id, c] = d.tick.split(':'); const t = T().find(x => x.id === id); const rep = Object.assign({}, t.replied || {}); rep[c] = !rep[c]; Store.saveTask(Object.assign({}, t, { replied: rep })); openCircular(T().find(x => x.id === id)); return; }
-  if (d.more != null) { ({ people: openPeopleList, branches: openBranchList, cats: openCats, about: openAbout, data: openData, csv: exportCSV, logins: editLogins, pin: () => changePin(), sync: doSync, sheet: () => window.open(CFG.SHEET_URL, '_blank') })[d.more](); return; }
+  if (d.more != null) { ({ people: openPeopleList, branches: openBranchList, cats: openCats, repeats: openRepeatsList, about: openAbout, data: openData, csv: exportCSV, logins: editLogins, pin: () => changePin(), sync: doSync, sheet: () => window.open(CFG.SHEET_URL, '_blank') })[d.more](); return; }
+  if (d.repeat != null) { openRepeat(d.repeat); return; }
+  if (b.hasAttribute('data-give-rep')) { openGive(); setTimeout(() => { const s = $('#g-rep'); if (s) { s.value = 'months:1'; s.dispatchEvent(new Event('change', { bubbles: true })); } }, 0); return; }
+  if (d.repToggle != null) { const rp = Store.repeat(d.repToggle); Store.saveRepeat(Object.assign({}, rp, { active: !rp.active })); openRepeat(rp.id); toast(rp.active ? 'Paused' : 'Resumed', 'ok'); return; }
+  if (d.repNow != null) { repeatCreateNow(d.repNow); return; }
+  if (d.repEdit != null) { repeatEditForm(d.repEdit); return; }
+  if (b.hasAttribute('data-cancelrep')) { $('#repform').innerHTML = ''; return; }
+  if (d.repDel != null) { if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Tap again to delete'; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.innerHTML = ICON.trash + ' Delete'; } }, 3000); return; } Store.deleteRepeat(d.repDel); openRepeatsList(); toast('Repeat removed. Tasks already created stay.', 'ok'); return; }
   if (d.editStaff != null) { openStaffEditor(d.editStaff); return; }
   if (d.delStaff != null) { const p = Store.person(d.delStaff); if (staffTasks(p.id).some(open)) { toast('Has open tasks', 'err'); return; } Store.deletePerson(p.id); openPeopleList(); toast('Removed ' + p.name, 'ok'); return; }
   if (d.editBranch != null) { openBranchEditor(d.editBranch === '' ? '' : +d.editBranch); return; }

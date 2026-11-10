@@ -13,7 +13,7 @@ window.APP_CONFIG = {
   API_URL: 'https://script.google.com/macros/s/AKfycbxYF4xOuGmf4JhNcy7QLXuy65SPmrbeMYvj5wgHZxHDEQT_i2e7gq8K78UG-bKwHElq/exec',
 
   APP_NAME: 'RO Task Tracker',
-  VERSION: '0.2.2',          // bump together with CACHE in sw.js on every release
+  VERSION: '0.3.0',          // bump together with CACHE in sw.js on every release
 
   // Short prefix for this app's browser storage, so two apps on the same
   // GitHub Pages domain never read each other's login or cache.
