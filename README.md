@@ -8,6 +8,8 @@ extensions and notes. Live at **https://anmolbage.github.io/ro-task-tracker/**.
 
 Two logins, both Admin: `rm` (the RM) and `anmol` (technical support). Officers and BMs do not log in.
 
+**User manual:** https://claude.ai/artifact/RgE1XDM3bH1gdu6kWjh1M6 · **Training deck:** https://claude.ai/artifact/QhNZhbY4Xk1HPh2MF7fEpB (shared by Anmol on request).
+
 ---
 
 ## The three pieces, and what each one does
