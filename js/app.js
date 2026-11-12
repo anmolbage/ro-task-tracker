@@ -218,8 +218,8 @@ function renderPeople() {
   const withTasks = rows.filter(r => r.o.length), free = rows.filter(r => !r.o.length);
   const row = r => '<button class="prow" data-person="' + esc(r.p.id) + '"><div class="av" style="--h:var(--w-staff)">' + esc(initials(r.p.name)) + '</div>' +
     '<div class="pm"><div class="n">' + esc(r.p.name) + '</div><div class="r">' + esc(r.p.role) + '</div></div>' +
-    '<div class="pc">' + (r.ov.length ? '<b class="bad num">' + plural(r.ov.length, 'overdue') + '</b>' : r.o.length ? '<b class="num">' + plural(r.o.length, 'open') + '</b>' : '<b class="ok">nothing pending</b>') +
-    (r.o.length ? '<span class="num">' + plural(r.o.length, 'open') + (r.old ? ' · oldest ' + r.old + ' d' : '') + '</span>' : '') + '</div></button>';
+    '<div class="pc">' + (r.ov.length ? '<b class="bad num">' + (r.ov.length + ' overdue') + '</b>' : r.o.length ? '<b class="num">' + (r.o.length + ' open') + '</b>' : '<b class="ok">nothing pending</b>') +
+    (r.o.length ? '<span class="num">' + (r.o.length + ' open') + (r.old ? ' · oldest ' + r.old + ' d' : '') + '</span>' : '') + '</div></button>';
   let html = '<div class="note">Who has what in the Regional Office. Tap a name for every task you gave them and what they look after. Add or edit people under <b>More → People</b>.</div>';
   html += '<div class="sort">' + [['overdue', 'Most overdue first'], ['open', 'Most tasks first'], ['name', 'A–Z']].map(([k, l]) => '<button class="chip ' + (S.sort === k ? 'on' : '') + '" data-sort="' + k + '">' + l + '</button>').join('') + '</div>';
   html += section('Carrying tasks', withTasks.length, withTasks.length ? '<div class="list">' + withTasks.map(row).join('') + '</div>' : '<div class="empty">Nobody has an open task</div>');
@@ -234,7 +234,7 @@ function renderBranches() {
     '<div class="m"><span class="num"><b>' + d + ' of ' + n + '</b> branches replied' + (p ? ' · <b style="color:var(--danger)">' + p + ' pending</b>' : '') + '</span>' + dueHtml(t) + '</div></button>'; };
   const per = Store.branches.map(b => { const ts = branchTasks(b.code), o = ts.filter(open); return { b, o, ov: o.filter(isOver) }; }).filter(r => r.o.length).sort((a, b) => b.ov.length - a.ov.length || b.o.length - a.o.length);
   const bRow = r => '<button class="brow" data-branch="' + r.b.code + '"><div><div class="n">' + esc(r.b.name) + ' <span class="code">' + r.b.code + (r.b.bm ? ' · ' + esc(r.b.bm) : '') + '</span></div><div class="small muted">' + esc(r.o[0].text) + (r.o.length > 1 ? ' +' + (r.o.length - 1) + ' more' : '') + '</div></div>' +
-    '<div class="pc">' + (r.ov.length ? '<b class="bad num">' + plural(r.ov.length, 'overdue') + '</b>' : '<b class="num">' + plural(r.o.length, 'open') + '</b>') + (r.ov.length && r.o.length > r.ov.length ? '<span class="num">' + plural(r.o.length, 'open') + '</span>' : '') + '</div></button>';
+    '<div class="pc">' + (r.ov.length ? '<b class="bad num">' + (r.ov.length + ' overdue') + '</b>' : '<b class="num">' + (r.o.length + ' open') + '</b>') + (r.ov.length && r.o.length > r.ov.length ? '<span class="num">' + (r.o.length + ' open') + '</span>' : '') + '</div></button>';
   let html = section('Circulars to many branches', circ.filter(open).length, circ.length ? '<div class="list">' + circ.map(circRow).join('') + '</div>' : '<div class="empty">No circular yet. Use + → Many branches.</div>', '<span class="small faint">tap to tick off replies</span>');
   html += section('Tasks to one branch', per.length + ' branches', (per.length ? '<div class="list">' + per.map(bRow).join('') + '</div>' : '<div class="empty">No branch has an open task</div>') +
     '<p class="small faint" style="margin:10px 2px 0">' + (Store.branches.length - per.length) + ' other branches have no open task. BM names and mobiles are under <b>More → Branch contacts</b>.</p>');
