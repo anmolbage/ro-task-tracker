@@ -1,5 +1,5 @@
 /* RO Task Tracker — service worker (app shell cache, offline first) */
-const CACHE = 'ro-task-tracker-v0.3.1';   // bump with VERSION in js/config.js on every release
+const CACHE = 'ro-task-tracker-v0.4.0';   // bump with VERSION in js/config.js on every release
 const SHELL = [
   './',
   './index.html',

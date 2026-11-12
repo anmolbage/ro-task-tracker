@@ -45,7 +45,7 @@ function repeatLabel(rp) {
 }
 const REPEAT_OPTIONS = [['', 'Does not repeat'], ['days:1', 'Every day'], ['weeks:1', 'Every week'], ['weeks:2', 'Every 2 weeks'], ['months:1', 'Every month'], ['months:3', 'Every quarter'], ['months:6', 'Every 6 months'], ['years:1', 'Every year'], ['custom', 'Every N days…']];
 const LEAD_OPTIONS = [[0, 'On the due date'], [1, '1 day before'], [2, '2 days before'], [3, '3 days before'], [5, '5 days before'], [7, 'A week before'], [10, '10 days before'], [15, '15 days before']];
-const whoOfRepeat = rp => rp.toType === 'staff' ? ((Store.person(rp.toId) || {}).name || rp.toName) : rp.toType === 'branch' ? ((Store.branch(rp.toId) || {}).name || rp.toName) : (rp.toCodes || []).length + ' branches';
+const whoOfRepeat = rp => rp.toType === 'staff' ? ((Store.person(rp.toId) || {}).name || rp.toName) : rp.toType === 'team' ? 'Team: ' + (rp.toCodes || []).map(id => ((Store.person(id) || {}).name || String(id)).split(' ')[0]).join(', ') : rp.toType === 'branch' ? ((Store.branch(rp.toId) || {}).name || rp.toName) : (rp.toCodes || []).length + ' branches';
 
 const ICON = {
   today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18M9 15l2 2 4-4"/></svg>',
@@ -115,18 +115,23 @@ const daysLate = t => dayDiff(today(), t.dueDate);
 const groupOf = cat => { const g = Store.cats.find(g => g.items.includes(cat)); return g ? g.group : 'Other'; };
 const allCats = () => Store.cats.flatMap(g => g.items);
 const bname = c => { const b = Store.branch(c); return b ? b.name : 'Branch ' + c; };
+// A team task (toType 'team') is one task shared by several officers; their ids are in toCodes.
+const teamMembers = t => (t.toCodes || []).map(id => Store.person(id)).filter(Boolean);
+const isStaffTask = t => t.toType === 'staff' || t.toType === 'team';
 const whoName = t => {
   if (t.toType === 'staff') { const p = Store.person(t.toId); return p ? p.name : (t.toName || 'Former staff'); }
+  if (t.toType === 'team') { const m = teamMembers(t).map(p => p.name.split(' ')[0]); return m.length ? 'Team: ' + (m.length > 3 ? m.slice(0, 3).join(', ') + ' +' + (m.length - 3) : m.join(', ')) : (t.toName || 'Team'); }
   if (t.toType === 'branch') { const b = Store.branch(t.toId); return b ? b.name : (t.toName || 'Branch ' + t.toId); }
   const n = (t.toCodes || []).length; return n === Store.branches.length ? 'All ' + n + ' branches' : n + ' branches';
 };
-const whoRole = t => { if (t.toType === 'staff') { const p = Store.person(t.toId); return p ? p.role : 'left RO'; } return t.toType === 'branch' ? 'Branch · ' + t.toId : 'Circular'; };
-const whoClass = t => t.toType === 'staff' ? 'p-staff' : t.toType === 'branch' ? 'p-branch' : 'p-many';
+const whoRole = t => { if (t.toType === 'staff') { const p = Store.person(t.toId); return p ? p.role : 'left RO'; } if (t.toType === 'team') return ''; return t.toType === 'branch' ? 'Branch · ' + t.toId : 'Circular'; };
+const whoClass = t => isStaffTask(t) ? 'p-staff' : t.toType === 'branch' ? 'p-branch' : 'p-many';
 const pendingOf = t => (t.toCodes || []).filter(c => !(t.replied || {})[c]);
 const remCount = t => Store.logsFor(t.id).filter(l => l.kind === 'rem').length;
 const byUrgency = ts => ts.slice().sort((a, b) => (open(b) - open(a)) || (b.critical ? 1 : 0) - (a.critical ? 1 : 0) || String(a.dueDate).localeCompare(String(b.dueDate)));
 const byDue = ts => ts.slice().sort((a, b) => (open(b) - open(a)) || String(a.dueDate).localeCompare(String(b.dueDate)));
-const staffTasks = id => T().filter(t => t.toType === 'staff' && t.toId === id);
+const isWith = (t, id) => (t.toType === 'staff' && t.toId === id) || (t.toType === 'team' && (t.toCodes || []).includes(id));
+const staffTasks = id => T().filter(t => isWith(t, id));
 const branchTasks = code => T().filter(t => t.toType === 'branch' && Number(t.toId) === Number(code));
 const oldestDays = ts => ts.length ? Math.max(...ts.map(t => dayDiff(today(), t.givenOn))) : 0;
 const subName = p => { const x = p && p.sub ? Store.person(p.sub) : null; return x ? x.name : ''; };
@@ -149,6 +154,7 @@ function tagsHtml(t) {
   if (t.critical && open(t)) s += '<span class="pill p-crit">Critical</span>';
   if (SRC_PILL[t.source]) s += '<span class="pill ' + SRC_PILL[t.source][0] + '">' + SRC_PILL[t.source][1] + '</span>';
   if (t.toType === 'many' && open(t)) s += '<span class="pill p-many">' + pendingOf(t).length + ' pending</span>';
+  if (t.toType === 'team') s += '<span class="pill p-staff">Team of ' + (t.toCodes || []).length + '</span>';
   const rc = open(t) ? remCount(t) : 0;
   if (rc > 1) s += '<span class="pill p-rem">reminded ×' + rc + '</span>';
   if (t.repeatId) s += '<span class="pill p-cat">↻ repeats</span>';
@@ -184,8 +190,8 @@ const TABS = [['today', 'Today'], ['people', 'RO staff'], ['branches', 'Branches
 function renderToday() {
   const over = byUrgency(T().filter(isOver)), td = byUrgency(T().filter(isToday)), tm = byUrgency(T().filter(isTomorrow));
   const crit = byUrgency(T().filter(t => open(t) && t.critical));
-  const roOpen = T().filter(t => open(t) && t.toType === 'staff').length;
-  const brOpen = T().filter(t => open(t) && t.toType !== 'staff').length;
+  const roOpen = T().filter(t => open(t) && isStaffTask(t)).length;
+  const brOpen = T().filter(t => open(t) && !isStaffTask(t)).length;
   const hoOpen = T().filter(t => open(t) && t.source === 'ho').length;
   const chip = (k, n, l) => '<button class="hero-chip ' + (S.chase === k ? 'on' : '') + '" data-chase="' + k + '"><b class="num">' + n + '</b><span>' + l + '</span></button>';
   const d = toDate(today());
@@ -198,7 +204,7 @@ function renderToday() {
     '<button class="stat ' + (hoOpen ? 'bad' : '') + '" style="--h:var(--ho)" data-go="tasks" data-filter="ho"><b class="num">' + hoOpen + '</b><span>from HO, still open</span><small>what HO will chase</small></button></div>';
   const openT = T().filter(open);
   const stat = (label, ts, attrs) => ({ label, n: ts.length, ov: ts.filter(isOver).length, attrs });
-  const ppl = Store.people.map(p => stat(p.name.split(' ')[0], openT.filter(t => t.toType === 'staff' && t.toId === p.id), 'data-person="' + esc(p.id) + '"'));
+  const ppl = Store.people.map(p => stat(p.name.split(' ')[0], openT.filter(t => isWith(t, p.id)), 'data-person="' + esc(p.id) + '"'));
   const cats = Store.cats.map(g => stat(g.group, openT.filter(t => groupOf(t.category) === g.group), 'data-go="tasks" data-grp="' + esc(g.group) + '" data-filter="open"'));
   const brs = Store.branches.map(b => stat(b.name, openT.filter(t => t.toType === 'branch' && Number(t.toId) === Number(b.code)), 'data-branch="' + b.code + '"'));
   html += summaryCard('ppl', 'By RO staff', ppl, 'open · <span style="color:var(--danger)">late</span> · ' + Store.people.filter(p => !openT.some(t => t.toType === 'staff' && t.toId === p.id)).length + ' with nothing pending');
@@ -235,7 +241,9 @@ function renderBranches() {
   const per = Store.branches.map(b => { const ts = branchTasks(b.code), o = ts.filter(open); return { b, o, ov: o.filter(isOver) }; }).filter(r => r.o.length).sort((a, b) => b.ov.length - a.ov.length || b.o.length - a.o.length);
   const bRow = r => '<button class="brow" data-branch="' + r.b.code + '"><div><div class="n">' + esc(r.b.name) + ' <span class="code">' + r.b.code + (r.b.bm ? ' · ' + esc(r.b.bm) : '') + '</span></div><div class="small muted">' + esc(r.o[0].text) + (r.o.length > 1 ? ' +' + (r.o.length - 1) + ' more' : '') + '</div></div>' +
     '<div class="pc">' + (r.ov.length ? '<b class="bad num">' + (r.ov.length + ' overdue') + '</b>' : '<b class="num">' + (r.o.length + ' open') + '</b>') + (r.ov.length && r.o.length > r.ov.length ? '<span class="num">' + (r.o.length + ' open') + '</span>' : '') + '</div></button>';
-  let html = section('Circulars to many branches', circ.filter(open).length, circ.length ? '<div class="list">' + circ.map(circRow).join('') + '</div>' : '<div class="empty">No circular yet. Use + → Many branches.</div>', '<span class="small faint">tap to tick off replies</span>');
+  let html = '<button class="btn wa full" data-broadcast>' + ICON.wa + ' Message branches on WhatsApp</button>' +
+    '<p class="small faint" style="margin:-6px 2px 0">One message to many Branch Managers, tracked as a task or sent as a plain message.</p>';
+  html += section('Circulars to many branches', circ.filter(open).length, circ.length ? '<div class="list">' + circ.map(circRow).join('') + '</div>' : '<div class="empty">No circular yet. Use + → Many branches.</div>', '<span class="small faint">tap to tick off replies</span>');
   html += section('Tasks to one branch', per.length + ' branches', (per.length ? '<div class="list">' + per.map(bRow).join('') + '</div>' : '<div class="empty">No branch has an open task</div>') +
     '<p class="small faint" style="margin:10px 2px 0">' + (Store.branches.length - per.length) + ' other branches have no open task. BM names and mobiles are under <b>More → Branch contacts</b>.</p>');
   return html;
@@ -327,8 +335,8 @@ function openTask(id) {
   if (t.toType === 'many') return openCircular(t);
   const p = t.toType === 'staff' ? Store.person(t.toId) : null, b = t.toType === 'branch' ? Store.branch(t.toId) : null;
   const body =
-    '<div class="tags" style="justify-content:flex-start"><span class="pill ' + whoClass(t) + '">' + (t.toType === 'staff' ? 'RO staff' : 'Branch') + '</span>' + (t.category ? '<span class="pill p-cat">' + esc(t.category) + '</span>' : '') + tagsHtml(t) + (open(t) ? '' : '<span class="pill p-done">Done</span>') + '</div>' +
-    '<div class="kv"><div><div class="l">Given to</div><div class="v">' + esc(whoName(t)) + '</div><div class="small muted">' + esc(whoRole(t)) + (b && b.bm ? ' · BM ' + esc(b.bm) : '') + '</div></div>' +
+    '<div class="tags" style="justify-content:flex-start"><span class="pill ' + whoClass(t) + '">' + (isStaffTask(t) ? 'RO staff' : 'Branch') + '</span>' + (t.category ? '<span class="pill p-cat">' + esc(t.category) + '</span>' : '') + tagsHtml(t) + (open(t) ? '' : '<span class="pill p-done">Done</span>') + '</div>' +
+    '<div class="kv"><div><div class="l">Given to</div><div class="v">' + esc(whoName(t)) + '</div><div class="small muted">' + esc(t.toType === 'team' ? 'One task shared by the team' : whoRole(t)) + (b && b.bm ? ' · BM ' + esc(b.bm) : '') + '</div></div>' +
     '<div><div class="l">' + (open(t) ? 'Due' : 'Done on') + '</div><div class="v">' + (open(t) ? pretty(t.dueDate) : pretty(t.doneOn)) + '</div><div class="small">' + dueHtml(t) + '</div></div>' +
     '<div><div class="l">Given on</div><div class="v">' + pretty(t.givenOn) + '</div><div class="small muted">' + esc(t.how) + ' · ' + plural(dayDiff(today(), t.givenOn), 'day') + ' ago</div></div>' +
     '<div><div class="l">Source · category</div><div class="v">' + esc(SOURCES[t.source] || t.source) + '</div><div class="small muted">' + esc(groupOf(t.category)) + '</div></div>' +
@@ -341,7 +349,8 @@ function openTask(id) {
     (t.repeatId ? '<div class="note">↻ <b>Repeating task.</b> ' + (Store.repeat(t.repeatId) ? esc(repeatLabel(Store.repeat(t.repeatId))) + (Store.repeat(t.repeatId).active ? ' · next on ' + esc(pretty(Store.repeat(t.repeatId).nextDue)) : ' · paused') + ' <button class="link" data-repeat="' + esc(t.repeatId) + '">Open the repeat</button>' : 'The repeat it came from has been removed.') + '</div>' : '') +
     '<div class="card"><p class="eyebrow">History</p><ul class="tl">' + histHtml(t) + '</ul></div>' +
     (p ? '<div class="note"><b>' + esc(p.name) + '</b> looks after: ' + esc((p.cats || []).join(', ')) + '.</div>' : '') +
-    '<div class="btns" style="justify-content:space-between"><button class="btn sm ghost" data-' + (t.toType === 'staff' ? 'person="' + esc(t.toId) : 'branch="' + esc(t.toId)) + '">All tasks with ' + esc(whoName(t)) + ' →</button><button class="btn sm ghost" style="color:var(--danger)" data-deltask="' + esc(t.id) + '">' + ICON.trash + ' Delete</button></div>' +
+    (t.toType === 'team' ? '<div class="note"><b>Team:</b> ' + teamMembers(t).map(m => '<button class="link" data-person="' + esc(m.id) + '">' + esc(m.name) + '</button>').join(', ') + '. It shows under each of them and is marked done once, for all.</div>' : '') +
+    '<div class="btns" style="justify-content:space-between">' + (t.toType === 'team' ? '<span></span>' : '<button class="btn sm ghost" data-' + (t.toType === 'staff' ? 'person="' + esc(t.toId) : 'branch="' + esc(t.toId)) + '">All tasks with ' + esc(whoName(t)) + ' →</button>') + '<button class="btn sm ghost" style="color:var(--danger)" data-deltask="' + esc(t.id) + '">' + ICON.trash + ' Delete</button></div>' +
     '<p class="small faint" style="margin:0">' + esc(t.id) + ' · added by ' + esc(t.createdBy || '') + '</p>';
   sheet(esc(t.text), 'Task', body);
 }
@@ -404,15 +413,100 @@ function remindText(t) {
     ? 'क्षेत्रीय कार्यालय हजारीबाग से अनुस्मारक\n\n"' + t.text + '" (' + pretty(t.givenOn) + ' को दिया गया) की नियत तिथि ' + pretty(t.dueDate) + ' ' + (late ? 'थी (' + late + ' दिन विलंब)' : 'है') + '। कृपया पूर्ण कर आज ही सूचित करें।\n— ' + st.sigHi
     : 'Reminder from RO Hazaribag\n\n"' + t.text + '" (given ' + pretty(t.givenOn) + ') ' + (late ? 'was due on ' + pretty(t.dueDate) + ' and is ' + plural(late, 'day') + ' late' : 'is due on ' + pretty(t.dueDate)) + '. Please complete it and confirm today.\n— ' + st.sig;
 }
+/* ---------------- WhatsApp to one or many ---------------- */
+// WhatsApp has no free way to send to many people in one tap, so a message to several people
+// is a list: one WhatsApp button per person with the text filled in, plus Copy for a group.
+const waHref = (d, txt) => 'https://wa.me/91' + d + '?text=' + encodeURIComponent(txt);
+const branchRecip = b => ({ name: b.name + ' · ' + b.code, sub: b.bm ? 'BM ' + b.bm : 'BM name not saved', mobile: b.mobile });
+function recipientsOf(t) {
+  if (t.toType === 'staff') { const p = Store.person(t.toId); return p ? [{ name: p.name, sub: p.role, mobile: p.mobile }] : []; }
+  if (t.toType === 'team') return teamMembers(t).map(p => ({ name: p.name, sub: p.role, mobile: p.mobile }));
+  if (t.toType === 'branch') { const b = Store.branch(t.toId); return b ? [branchRecip(b)] : []; }
+  return pendingOf(t).map(c => Store.branch(c)).filter(Boolean).map(branchRecip);
+}
+function sendRowsHtml(recips, txt) {
+  const withMob = recips.filter(r => digits(r.mobile)).length;
+  return '<div class="card"><div class="sec-row" style="margin-bottom:4px"><p class="eyebrow" style="margin:0">Send one by one</p><span class="small faint num" id="sentcount" data-n="' + withMob + '">0 of ' + withMob + ' opened</span></div><div class="menu">' +
+    recips.slice().sort((a, b) => a.name.localeCompare(b.name)).map(r => { const d = digits(r.mobile);
+      return '<div class="erow"><div style="min-width:0"><div class="n">' + esc(r.name) + '</div><div class="s">' + esc(r.sub || '') + '</div></div>' +
+        (d ? '<a class="btn sm wa" data-wa="' + d + '" data-sentmark href="' + waHref(d, txt) + '" target="_blank" rel="noopener">' + ICON.wa + ' WhatsApp</a>' : '<span class="mob">no mobile</span>') + '</div>'; }).join('') +
+    '</div></div>';
+}
 function openRemind(id) {
   const t = T().find(x => x.id === id); if (!t) return;
-  const d = digits(mobileOf(t)), txt = remindText(t);
+  const multi = t.toType === 'team' || t.toType === 'many';
+  const d = multi ? '' : digits(mobileOf(t)), txt = remindText(t);
   const body = '<div class="toggle">' + [['en', 'English'], ['hi', 'हिन्दी']].map(([k, l]) => '<button class="' + (settings().lang === k ? 'on' : '') + '" data-lang-r="' + k + '">' + l + '</button>').join('') + '</div>' +
     '<div class="msg" id="rtext">' + esc(txt) + '</div>' +
-    '<div class="cbtns">' + (d ? '<a class="btn wa" id="walink" href="https://wa.me/91' + d + '?text=' + encodeURIComponent(txt) + '" target="_blank" rel="noopener" data-send="' + esc(t.id) + '">' + ICON.wa + ' Open WhatsApp</a>' : '<button class="btn wa" data-send="' + esc(t.id) + '">' + ICON.wa + ' Mark as reminded</button>') + '<button class="btn" data-copy>' + ICON.copy + ' Copy text</button></div>' +
-    '<p class="small faint" style="margin:0">' + (d ? 'Opens WhatsApp to ' + esc(whoName(t)) + ' with the text filled in; you press send there. "Reminded" is written into the history.' : t.toType === 'many' ? 'Copy the text and paste it in the BMs\' WhatsApp group, or save BM mobiles under More to open each chat.' : 'No mobile saved for ' + esc(whoName(t)) + '. Copy the text, or add the mobile under More.') + '</p>' +
+    (multi
+      ? '<div class="cbtns"><button class="btn" data-copy>' + ICON.copy + ' Copy text</button><button class="btn ok" data-send="' + esc(t.id) + '">' + ICON.tick + ' Mark as reminded</button></div>' +
+        sendRowsHtml(recipientsOf(t), txt) +
+        '<p class="small faint" style="margin:0">Tap WhatsApp beside each name: the text is filled in and you press send there. Or copy the text into a group. Then tap Mark as reminded so the history records it.</p>'
+      : '<div class="cbtns">' + (d ? '<a class="btn wa" id="walink" data-wa="' + d + '" href="' + waHref(d, txt) + '" target="_blank" rel="noopener" data-send="' + esc(t.id) + '">' + ICON.wa + ' Open WhatsApp</a>' : '<button class="btn wa" data-send="' + esc(t.id) + '">' + ICON.wa + ' Mark as reminded</button>') + '<button class="btn" data-copy>' + ICON.copy + ' Copy text</button></div>' +
+        '<p class="small faint" style="margin:0">' + (d ? 'Opens WhatsApp to ' + esc(whoName(t)) + ' with the text filled in; you press send there. "Reminded" is written into the history.' : 'No mobile saved for ' + esc(whoName(t)) + '. Copy the text, or add the mobile under More.') + '</p>') +
     '<div class="btns"><button class="btn sm ghost" data-task="' + esc(t.id) + '">← Back to the task</button></div>';
   sheet('Remind ' + esc(whoName(t)), esc(t.text), body);
+}
+// A message to many branches: optionally saved as a circular (a task with a tick list), otherwise just sent.
+function openBroadcast() {
+  const gap = Number(settings().dueGap) || 0, st = settings();
+  const M = { sel: new Set(), task: false, sig: true };
+  const all = Store.branches.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const nodals = Store.people.filter(p => (p.nodal || []).length).sort((a, b) => a.name.localeCompare(b.name));
+  const body = '<form id="bc">' +
+    '<label class="f">Message<textarea class="inp" id="m-text" rows="4" required placeholder="e.g. Send the list of inoperative accounts above ₹1 lakh by Friday."></textarea></label>' +
+    '<div class="sw" style="margin-top:10px"><div><div class="t">Add signature</div><div class="s">— ' + esc(st.sig) + '</div></div><button type="button" class="knob ok on" id="m-sig" aria-pressed="true" aria-label="Add signature"></button></div>' +
+    '<div id="m-who" style="margin-top:12px"></div>' +
+    '<div class="sw" style="margin-top:12px"><div><div class="t">Track replies as a task</div><div class="s">Saves it as a circular with a tick list and a due date</div></div><button type="button" class="knob ok" id="m-task" aria-pressed="false" aria-label="Track replies as a task"></button></div>' +
+    '<div id="m-taskfields" hidden style="margin-top:10px"><div class="row2"><label class="f">Category of task' + catSelect('m-cat', '', '').replace('<option value="__new">+ New category…</option>', '') + '</label>' +
+    '<label class="f">Reply due by<input class="inp" type="date" id="m-due" value="' + addDays(today(), gap) + '" min="' + today() + '"></label></div></div>' +
+    '<button class="btn pri full" type="submit" style="margin-top:14px">Next: send on WhatsApp</button>' +
+    '<p class="small faint" style="margin:8px 0 0;text-align:center">Nothing is sent yet. The next screen opens WhatsApp for each branch.</p></form>';
+  sheet('Message branches', 'One WhatsApp message to many Branch Managers', body);
+  const draw = () => {
+    $('#m-who').innerHTML = '<label class="f">To which branches <span class="faint">(' + M.sel.size + ' of ' + all.length + ' chosen)</span></label>' +
+      '<div class="quick" style="margin-top:6px"><button type="button" data-mall class="' + (M.sel.size === all.length ? 'on' : '') + '">All ' + all.length + '</button><button type="button" data-mnone>None</button>' +
+      nodals.map(p => '<button type="button" data-mnodal="' + esc(p.id) + '" class="' + (p.nodal.every(c => M.sel.has(Number(c))) ? 'on' : '') + '">' + esc(p.name.split(' ')[0]) + '’s branches</button>').join('') + '</div>' +
+      '<div class="quick" style="margin-top:8px">' + all.map(b => '<button type="button" data-mb="' + b.code + '" class="' + (M.sel.has(Number(b.code)) ? 'on' : '') + '">' + esc(b.name) + '</button>').join('') + '</div>';
+  };
+  draw();
+  const form = $('#bc');
+  form.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.mb) { const c = +b.dataset.mb; M.sel.has(c) ? M.sel.delete(c) : M.sel.add(c); draw(); }
+    else if (b.hasAttribute('data-mall')) { all.forEach(x => M.sel.add(Number(x.code))); draw(); }
+    else if (b.hasAttribute('data-mnone')) { M.sel.clear(); draw(); }
+    else if (b.dataset.mnodal) { const p = Store.person(b.dataset.mnodal), codes = (p.nodal || []).map(Number); const on = codes.every(c => M.sel.has(c)); codes.forEach(c => on ? M.sel.delete(c) : M.sel.add(c)); draw(); }
+    else if (b.id === 'm-sig') { M.sig = !M.sig; b.classList.toggle('on', M.sig); b.setAttribute('aria-pressed', String(M.sig)); }
+    else if (b.id === 'm-task') { M.task = !M.task; b.classList.toggle('on', M.task); b.setAttribute('aria-pressed', String(M.task)); $('#m-taskfields').hidden = !M.task; }
+  });
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const text = $('#m-text').value.trim();
+    if (!text) { toast('Write the message', 'err'); return; }
+    const codes = all.map(b => Number(b.code)).filter(c => M.sel.has(c));
+    if (!codes.length) { toast('Choose at least one branch', 'err'); return; }
+    const msg = text + (M.sig ? '\n— ' + st.sig : '');
+    let taskId = '';
+    if (M.task) {
+      const cat = $('#m-cat').value, due = $('#m-due').value;
+      if (!cat) { toast('Choose a category', 'err'); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) { toast('Pick the reply date', 'err'); return; }
+      const t = { id: 'T' + Date.now() + Math.floor(Math.random() * 900 + 100), toType: 'many', toId: '', toName: codes.length + ' branches', toCodes: codes, replied: Object.fromEntries(codes.map(c => [c, false])),
+        category: cat, text, how: 'WhatsApp', givenOn: today(), dueDate: due, status: 'open', doneOn: '', source: 'own', critical: false, snoozeTill: '' };
+      Store.saveTask(t, [{ kind: 'given', note: 'Message sent on WhatsApp to ' + codes.length + ' branches' }]);
+      taskId = t.id;
+    }
+    openSendList(msg, codes, taskId);
+  });
+}
+function openSendList(msg, codes, taskId) {
+  const recips = codes.map(c => Store.branch(c)).filter(Boolean).map(branchRecip);
+  sheet('Send to ' + (codes.length === 1 ? '1 branch' : codes.length + ' branches'), taskId ? 'Saved as a circular: replies are tracked under Branches' : 'Message only: nothing is saved in the app',
+    '<div class="msg" id="rtext">' + esc(msg) + '</div>' +
+    '<div class="cbtns"><button class="btn" data-copy>' + ICON.copy + ' Copy text</button>' + (taskId ? '<button class="btn" data-task="' + esc(taskId) + '">Open the circular</button>' : '<button class="btn" data-close>Done</button>') + '</div>' +
+    sendRowsHtml(recips, msg) +
+    '<p class="small faint" style="margin:0">WhatsApp cannot be sent to many people in one tap from an app. Tap WhatsApp beside each branch and press send there, or copy the text into your BMs’ group or broadcast list.</p>');
 }
 function openReminders() {
   const over = byUrgency(T().filter(t => isOver(t) && isReminder(t))), td = byUrgency(T().filter(t => isToday(t) && isReminder(t))), soon = byDue(T().filter(t => isSoon(t) && isReminder(t)));
@@ -462,12 +556,18 @@ function openGive(pre) {
     '<button class="btn pri full" type="submit" style="margin-top:14px">Save task</button>' +
     '<p class="small faint" style="margin:8px 0 0;text-align:center">About 20 seconds. The reminder is set automatically.</p></form>';
   sheet('Give a task', 'Saved to the Sheet; comes back to you on its due date', body);
-  const G = { type, staff: pre.staff || '', branch: pre.branch || '', many: new Set(), crit: false };
+  // staffSel: one or more officers. team: 'each' = a separate task per officer, 'team' = one shared task.
+  const G = { type, staffSel: new Set(pre.staff ? [pre.staff] : []), team: 'each', branch: pre.branch || '', many: new Set(), crit: false };
   const who = $('#g-who');
+  const byName = (a, b) => a.name.localeCompare(b.name);
   const drawWho = () => {
-    if (G.type === 'staff') { const p = G.staff ? Store.person(G.staff) : null;
-      who.innerHTML = '<label class="f">To whom</label><div class="quick" style="margin-top:6px">' + Store.people.map(x => '<button type="button" data-gs="' + esc(x.id) + '" class="' + (G.staff === x.id ? 'on' : '') + '" title="' + esc(x.role) + '">' + esc(x.name) + '</button>').join('') + '</div>' + (p ? '<p class="small muted" style="margin:6px 0 0"><b>' + esc(p.role) + '</b> · looks after ' + esc((p.cats || []).slice(0, 4).join(', ')) + ((p.cats || []).length > 4 ? '…' : '') + '</p>' : '');
-      const cur = $('#g-cat') ? $('#g-cat').value : ''; $('#g-catwrap').innerHTML = catSelect('g-cat', G.staff, cur); }
+    if (G.type === 'staff') {
+      const sel = Store.people.filter(x => G.staffSel.has(x.id)).sort(byName), p = sel.length === 1 ? sel[0] : null;
+      who.innerHTML = '<label class="f">To whom <span class="faint">(tap one or more)</span></label><div class="quick" style="margin-top:6px">' + Store.people.slice().sort(byName).map(x => '<button type="button" data-gs="' + esc(x.id) + '" class="' + (G.staffSel.has(x.id) ? 'on' : '') + '" title="' + esc(x.role) + '">' + esc(x.name) + '</button>').join('') + '</div>' +
+        (p ? '<p class="small muted" style="margin:6px 0 0"><b>' + esc(p.role) + '</b> · looks after ' + esc((p.cats || []).slice(0, 4).join(', ')) + ((p.cats || []).length > 4 ? '…' : '') + '</p>' : '') +
+        (sel.length > 1 ? '<div class="toggle" style="margin-top:8px"><button type="button" data-gteam="each" class="' + (G.team === 'each' ? 'on' : '') + '">Each gets their own task</button><button type="button" data-gteam="team" class="' + (G.team === 'team' ? 'on' : '') + '">One task, as a team</button></div>' +
+          '<p class="small muted" style="margin:6px 0 0">' + (G.team === 'team' ? 'One shared task for ' + sel.length + ' officers. It shows under each of them and is marked done once.' : sel.length + ' separate tasks, one per officer, each tracked and closed on its own.') + '</p>' : '');
+      const cur = $('#g-cat') ? $('#g-cat').value : ''; $('#g-catwrap').innerHTML = catSelect('g-cat', p ? p.id : '', cur); }
     else if (G.type === 'branch') who.innerHTML = '<label class="f">Which branch<select class="inp" id="g-branch"><option value="">Choose a branch</option>' + Store.branches.slice().sort((a, b) => a.name.localeCompare(b.name)).map(b => '<option value="' + b.code + '" ' + (String(G.branch) === String(b.code) ? 'selected' : '') + '>' + esc(b.name) + ' · ' + b.code + (b.bm ? ' · ' + esc(b.bm) : '') + '</option>').join('') + '</select></label>';
     else who.innerHTML = '<label class="f">Which branches <span class="faint">(' + (G.many.size || 'all ' + Store.branches.length) + ')</span></label><div class="quick" style="margin-top:6px"><button type="button" data-gall class="' + (G.many.size ? '' : 'on') + '">All ' + Store.branches.length + '</button>' + Store.branches.map(b => '<button type="button" data-gm="' + b.code + '" class="' + (G.many.has(Number(b.code)) ? 'on' : '') + '">' + esc(b.name) + '</button>').join('') + '</div>';
   };
@@ -476,7 +576,8 @@ function openGive(pre) {
   form.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.dataset.gtype) { G.type = b.dataset.gtype; form.querySelectorAll('[data-gtype]').forEach(x => x.classList.toggle('on', x === b)); drawWho(); }
-    else if (b.dataset.gs) { G.staff = b.dataset.gs; drawWho(); }
+    else if (b.dataset.gs) { G.staffSel.has(b.dataset.gs) ? G.staffSel.delete(b.dataset.gs) : G.staffSel.add(b.dataset.gs); drawWho(); }
+    else if (b.dataset.gteam) { G.team = b.dataset.gteam; drawWho(); }
     else if (b.dataset.gm) { const c = +b.dataset.gm; G.many.has(c) ? G.many.delete(c) : G.many.add(c); drawWho(); }
     else if (b.hasAttribute('data-gall')) { G.many.clear(); drawWho(); }
     else if (b.dataset.qd != null) { $('#g-due').value = addDays(today(), +b.dataset.qd); form.querySelectorAll('[data-qd]').forEach(x => x.classList.toggle('on', x === b)); }
@@ -493,10 +594,17 @@ function openGive(pre) {
     const text = $('#g-text').value.trim(), due = $('#g-due').value;
     if (!text) { toast('Write what the task is', 'err'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) { toast('Pick a due date', 'err'); return; }
-    const t = { toType: G.type, toId: '', toName: '', toCodes: [], replied: {} };
-    if (G.type === 'staff') { if (!G.staff) { toast('Pick a person', 'err'); return; } t.toId = G.staff; t.toName = (Store.person(G.staff) || {}).name || ''; }
-    else if (G.type === 'branch') { if (!G.branch) { toast('Pick a branch', 'err'); return; } t.toId = String(G.branch); t.toName = (Store.branch(G.branch) || {}).name || ''; }
-    else { t.toCodes = G.many.size ? [...G.many] : Store.branches.map(b => Number(b.code)); t.replied = {}; t.toName = t.toCodes.length + ' branches'; }
+    // targets: one entry per task to create
+    let targets;
+    if (G.type === 'staff') {
+      const sel = Store.people.filter(x => G.staffSel.has(x.id)).sort(byName);
+      if (!sel.length) { toast('Pick a person', 'err'); return; }
+      targets = sel.length > 1 && G.team === 'team'
+        ? [{ toType: 'team', toId: '', toName: sel.map(x => x.name).join(', '), toCodes: sel.map(x => x.id), replied: {} }]
+        : sel.map(x => ({ toType: 'staff', toId: x.id, toName: x.name, toCodes: [], replied: {} }));
+    }
+    else if (G.type === 'branch') { if (!G.branch) { toast('Pick a branch', 'err'); return; } targets = [{ toType: 'branch', toId: String(G.branch), toName: (Store.branch(G.branch) || {}).name || '', toCodes: [], replied: {} }]; }
+    else { const codes = G.many.size ? [...G.many] : Store.branches.map(b => Number(b.code)); targets = [{ toType: 'many', toId: '', toName: codes.length + ' branches', toCodes: codes, replied: {} }]; }
     let cat = $('#g-cat').value;
     if (cat === '__new') {
       cat = $('#g-catname').value.trim(); if (!cat) { toast('Name the new category', 'err'); return; }
@@ -505,21 +613,26 @@ function openGive(pre) {
     }
     if (!cat) { toast('Choose a category', 'err'); return; }
     const note = $('#g-note').value.trim();
-    Object.assign(t, { category: cat, text, how: $('#g-how').value, givenOn: today(), dueDate: due, status: 'open', doneOn: '', source: $('#g-src').value, critical: G.crit, snoozeTill: '' });
     const rep = $('#g-rep').value;
-    if (rep) {
-      let freq, n;
-      if (rep === 'custom') { freq = 'days'; n = parseInt($('#g-repn').value, 10) || 0; if (n < 1) { toast('Every how many days?', 'err'); return; } }
-      else { const parts = rep.split(':'); freq = parts[0]; n = Number(parts[1]) || 1; }
-      const anchorDay = (freq === 'months' || freq === 'years') ? toDate(due).getDate() : 0;
-      const rp = { id: 'P' + Date.now() + Math.floor(Math.random() * 1000), toType: t.toType, toId: t.toId, toName: t.toName, toCodes: t.toCodes || [], category: cat, text, how: t.how, source: t.source, critical: G.crit,
-        freq, n, anchorDay, leadDays: Number($('#g-lead').value) || 0, nextDue: nextDueIso(due, freq, n, anchorDay), lastDue: due, active: true };
-      Store.saveRepeat(rp);
-      t.repeatId = rp.id;
-    }
-    Store.saveTask(t, [{ kind: 'given', note: rep ? (note ? note + ' · ' : '') + 'First of a repeating task' : note }]);
+    let freq, n;
+    if (rep === 'custom') { freq = 'days'; n = parseInt($('#g-repn').value, 10) || 0; if (n < 1) { toast('Every how many days?', 'err'); return; } }
+    else if (rep) { const parts = rep.split(':'); freq = parts[0]; n = Number(parts[1]) || 1; }
+    const how = $('#g-how').value, source = $('#g-src').value, lead = Number($('#g-lead').value) || 0, stamp = Date.now();
+    const uid = i => stamp + String(i).padStart(2, '0') + Math.floor(Math.random() * 900 + 100);   // ids stay unique when several tasks are saved at once
+    targets.forEach((tg, i) => {
+      const t = Object.assign({ id: 'T' + uid(i) }, tg, { category: cat, text, how, givenOn: today(), dueDate: due, status: 'open', doneOn: '', source, critical: G.crit, snoozeTill: '' });
+      if (rep) {
+        const anchorDay = (freq === 'months' || freq === 'years') ? toDate(due).getDate() : 0;
+        const rp = { id: 'P' + uid(i), toType: t.toType, toId: t.toId, toName: t.toName, toCodes: t.toCodes || [], category: cat, text, how, source, critical: G.crit,
+          freq, n, anchorDay, leadDays: lead, nextDue: nextDueIso(due, freq, n, anchorDay), lastDue: due, active: true };
+        Store.saveRepeat(rp);
+        t.repeatId = rp.id;
+      }
+      Store.saveTask(t, [{ id: 'L' + uid(i), kind: 'given', note: rep ? (note ? note + ' · ' : '') + 'First of a repeating task' : note }]);
+    });
     forceClose(); S.tab = 'today'; render();
-    toast(navigator.onLine ? 'Saved. Reminder on ' + pretty(addDays(due, -(Number(settings().remindBefore) || 0)) < today() ? today() : addDays(due, -(Number(settings().remindBefore) || 0))) : 'Saved on this phone — will sync', 'ok');
+    const remOn = addDays(due, -(Number(settings().remindBefore) || 0));
+    toast(!navigator.onLine ? 'Saved on this phone — will sync' : targets.length > 1 ? 'Saved ' + targets.length + ' tasks, one for each officer' : 'Saved. Reminder on ' + pretty(remOn < today() ? today() : remOn), 'ok');
   });
 }
 function extendForm(id) {
@@ -668,6 +781,8 @@ function openAbout() {
     feat('bell', 'Reminders in the app', 'The bell shows overdue, due today and upcoming tasks; snooze one till tomorrow. Later: Google Tasks for phone notifications.') +
     feat('flag', 'Critical and HO items on top', 'Mark a task critical, or tag it as from HO or the district administration. Those sit at the top of Today.') +
     feat('branches', 'Branches and circulars', 'A task to one branch, or one circular to many branches with a tick list of who replied. Remind only the pending ones.') +
+    feat('people', 'Several officers at once', 'Pick more than one officer: each gets their own task, or they share one task as a team.') +
+    feat('wa', 'Message branches on WhatsApp', 'Write one message for many Branch Managers and send it branch by branch, as a tracked circular or as a plain message.') +
     feat('clock', 'History on every task', 'Given, reminded, extended, note, done, each with a date, in the TaskLog tab of the Sheet.') +
     feat('search', 'Find anything later', 'Search by a word, a person, a branch or a category across everything, done or not.') +
     feat('gear', 'Your lists, your control', 'People, branch contacts and categories are edited in the app and saved to the Sheet.') +
@@ -848,6 +963,11 @@ document.addEventListener('click', e => {
   if (d.filter != null && S.tab === 'tasks') { S.filter = d.filter; render(); return; }
   if (d.grp != null && S.tab === 'tasks' && !d.go) { S.grp = d.grp; render(); return; }
   if (b.id === 'fab') { openGive(); return; }
+  if (b.hasAttribute('data-broadcast')) { openBroadcast(); return; }
+  if (b.hasAttribute('data-sentmark')) {   // a WhatsApp link in a send list: let it open, and tick the row
+    if (!b.classList.contains('sentd')) { b.classList.add('sentd'); b.innerHTML = ICON.tick + ' Opened'; const c = $('#sentcount'); if (c) c.textContent = layer.querySelectorAll('a.sentd').length + ' of ' + c.dataset.n + ' opened'; }
+    return;
+  }
   if (b.id === 'bell') { openReminders(); return; }
   if (b.id === 'syncBtn') { doSync(); return; }
   if (b.hasAttribute('data-close')) { closeSheet(); return; }
@@ -885,7 +1005,7 @@ document.addEventListener('click', e => {
   if (d.rb != null) { Store.saveSettings({ remindBefore: +d.rb }); toast('Saved', 'ok'); return; }
   if (d.theme != null) { try { localStorage.setItem(LS.THEME, d.theme); } catch (err) {} applyTheme(d.theme); render(); return; }
   if (d.lang != null) { Store.saveSettings({ lang: d.lang }); toast('Saved', 'ok'); return; }
-  if (d.langR != null) { Store.saveSettings({ lang: d.langR }); layer.querySelectorAll('[data-lang-r]').forEach(x => x.classList.toggle('on', x === b)); const id = layer.querySelector('[data-send]').dataset.send; const t = T().find(x => x.id === id); const txt = remindText(t); $('#rtext').textContent = txt; const wl = $('#walink'); if (wl) wl.href = 'https://wa.me/91' + digits(mobileOf(t)) + '?text=' + encodeURIComponent(txt); return; }
+  if (d.langR != null) { Store.saveSettings({ lang: d.langR }); layer.querySelectorAll('[data-lang-r]').forEach(x => x.classList.toggle('on', x === b)); const id = layer.querySelector('[data-send]').dataset.send; const t = T().find(x => x.id === id); const txt = remindText(t); $('#rtext').textContent = txt; layer.querySelectorAll('a[data-wa]').forEach(a => { a.href = waHref(a.dataset.wa, txt); }); return; }
   if (b.hasAttribute('data-copy')) { copyText($('#rtext').textContent); return; }
   if (b.hasAttribute('data-logout')) { if (Store.queue.length && !confirm('You have unsynced changes. Sign out anyway?')) return; Store.clearSession(); showLogin(); return; }
 });
